@@ -1,0 +1,82 @@
+import React, { useState, useEffect } from "react";
+import { View, StyleSheet, TouchableWithoutFeedback, Text } from "react-native";
+
+export default function App() {
+  const [playerX, setPlayerX] = useState(150);
+  const [obstacleY, setObstacleY] = useState(-50);
+  const [obstacleX, setObstacleX] = useState(Math.random() * 300);
+  const [gameOver, setGameOver] = useState(false);
+
+  useEffect(() => {
+    let interval = setInterval(() => {
+      setObstacleY((y) => {
+        if (y > 600) {
+          setObstacleX(Math.random() * 300);
+          return -50;
+        }
+        return y + 5;
+      });
+    }, 16);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (
+      obstacleY > 540 &&
+      obstacleY < 600 &&
+      Math.abs(playerX - obstacleX) < 50
+    ) {
+      setGameOver(true);
+    }
+  }, [obstacleY]);
+
+  const movePlayer = (direction) => {
+    if (gameOver) return;
+    setPlayerX((prev) => Math.max(0, Math.min(300, prev + direction)));
+  };
+
+  return (
+    <TouchableWithoutFeedback
+      onPress={(e) => {
+        const x = e.nativeEvent.locationX;
+        x < 200 ? movePlayer(-40) : movePlayer(40);
+      }}
+    >
+      <View style={styles.container}>
+        {gameOver && <Text style={styles.gameOver}>Game Over</Text>}
+
+        <View style={[styles.player, { left: playerX }]} />
+        <View style={[styles.obstacle, { top: obstacleY, left: obstacleX }]} />
+      </View>
+    </TouchableWithoutFeedback>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#111",
+  },
+  player: {
+    width: 50,
+    height: 50,
+    backgroundColor: "#4CAF50",
+    position: "absolute",
+    bottom: 30,
+    borderRadius: 10,
+  },
+  obstacle: {
+    width: 50,
+    height: 50,
+    backgroundColor: "#FF3D00",
+    position: "absolute",
+    borderRadius: 10,
+  },
+  gameOver: {
+    color: "#fff",
+    fontSize: 32,
+    textAlign: "center",
+    marginTop: 200,
+  },
+});
