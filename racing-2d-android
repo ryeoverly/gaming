@@ -1,0 +1,714 @@
+```kotlin
+package com.example.racinggame
+
+import android.os.Bundle
+import android.graphics.*
+import android.view.*
+import android.content.Context
+import kotlin.math.*
+
+class MainActivity : android.app.Activity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_FULLSCREEN,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN
+        )
+
+        setContentView(RacingGameView(this))
+    }
+}
+
+class RacingGameView(context: Context) : View(context) {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // -------------------------
+    // Game state
+    // -------------------------
+
+    private var gameRunning = true
+    private var raceFinished = false
+
+    private var lap = 1
+    private val totalLaps = 3
+
+    private var playerProgress = 0f
+    private var playerSpeed = 0f
+
+    private var elapsedTime = 0f
+
+    private val maxSpeed = 900f
+    private val acceleration = 500f
+    private val braking = 800f
+    private val friction = 250f
+    private val steeringSpeed = 2.2f
+
+    // Player position on the track
+    private var playerX = 0f
+    private var playerY = 0f
+
+    private var playerAngle = 0f
+
+    // Track centerline points
+    private val track = mutableListOf<PointF>()
+
+    // AI cars
+    private val opponents = mutableListOf<Opponent>()
+
+    // Touch controls
+    private var acceleratePressed = false
+    private var brakePressed = false
+    private var steering = 0f
+
+    private var lastTime = System.nanoTime()
+
+    init {
+        createTrack()
+
+        playerX = track[0].x
+        playerY = track[0].y
+
+        createOpponents()
+
+        postInvalidateOnAnimation()
+    }
+
+    // -------------------------
+    // Track
+    // -------------------------
+
+    private fun createTrack() {
+
+        track.clear()
+
+        val points = 160
+
+        for (i in 0 until points) {
+
+            val angle = i.toFloat() / points * Math.PI * 2
+
+            val radiusX = 850f
+            val radiusY = 500f
+
+            val x = cos(angle).toFloat() * radiusX
+            val y = sin(angle).toFloat() * radiusY
+
+            track.add(PointF(x, y))
+        }
+    }
+
+    // -------------------------
+    // Opponents
+    // -------------------------
+
+    private fun createOpponents() {
+
+        opponents.clear()
+
+        for (i in 0 until 4) {
+
+            opponents.add(
+                Opponent(
+                    progress = -i * 0.015f,
+                    speed = 500f + i * 25f,
+                    offset = (i - 1.5f) * 100f
+                )
+            )
+        }
+    }
+
+    // -------------------------
+    // Game loop
+    // -------------------------
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+
+        val now = System.nanoTime()
+
+        val deltaTime =
+            ((now - lastTime) / 1_000_000_000.0).toFloat()
+
+        lastTime = now
+
+        val dt = deltaTime.coerceAtMost(0.05f)
+
+        update(dt)
+        drawGame(canvas)
+
+        postInvalidateOnAnimation()
+    }
+
+    // -------------------------
+    // Update
+    // -------------------------
+
+    private fun update(dt: Float) {
+
+        if (!gameRunning || raceFinished)
+            return
+
+        elapsedTime += dt
+
+        updatePlayer(dt)
+        updateOpponents(dt)
+
+        checkLap()
+    }
+
+    private fun updatePlayer(dt: Float) {
+
+        if (acceleratePressed) {
+
+            playerSpeed += acceleration * dt
+
+        } else {
+
+            playerSpeed -= friction * dt
+        }
+
+        if (brakePressed) {
+
+            playerSpeed -= braking * dt
+        }
+
+        playerSpeed = playerSpeed.coerceIn(0f, maxSpeed)
+
+        // Steering gets stronger with speed
+        if (playerSpeed > 20f) {
+
+            playerAngle +=
+                steering *
+                steeringSpeed *
+                dt *
+                (playerSpeed / maxSpeed)
+        }
+
+        playerX +=
+            cos(playerAngle) *
+            playerSpeed *
+            dt
+
+        playerY +=
+            sin(playerAngle) *
+            playerSpeed *
+            dt
+
+        // Keep car near track center
+        val nearest = nearestTrackPoint(playerX, playerY)
+
+        val distance =
+            distance(playerX, playerY, nearest.x, nearest.y)
+
+        val trackWidth = 170f
+
+        if (distance > trackWidth) {
+
+            playerSpeed *= 0.92f
+
+            playerX +=
+                (nearest.x - playerX) * 0.04f
+
+            playerY +=
+                (nearest.y - playerY) * 0.04f
+        }
+
+        // Progress around track
+        playerProgress +=
+            playerSpeed * dt / 85000f
+    }
+
+    private fun updateOpponents(dt: Float) {
+
+        for (car in opponents) {
+
+            car.progress +=
+                car.speed * dt / 85000f
+
+            if (car.progress > 1f)
+                car.progress -= 1f
+        }
+    }
+
+    // -------------------------
+    // Lap handling
+    // -------------------------
+
+    private fun checkLap() {
+
+        if (playerProgress >= 1f) {
+
+            playerProgress -= 1f
+            lap++
+
+            if (lap > totalLaps) {
+
+                raceFinished = true
+                gameRunning = false
+            }
+        }
+    }
+
+    // -------------------------
+    // Drawing
+    // -------------------------
+
+    private fun drawGame(canvas: Canvas) {
+
+        val width = width.toFloat()
+        val height = height.toFloat()
+
+        canvas.drawColor(Color.rgb(50, 145, 70))
+
+        canvas.save()
+
+        // Center camera around player
+        canvas.translate(
+            width / 2f - playerX,
+            height / 2f - playerY
+        )
+
+        drawTrack(canvas)
+        drawOpponents(canvas)
+        drawPlayer(canvas)
+
+        canvas.restore()
+
+        drawHUD(canvas)
+
+        if (raceFinished) {
+
+            drawFinishScreen(canvas)
+        }
+
+        drawControls(canvas)
+    }
+
+    private fun drawTrack(canvas: Canvas) {
+
+        val path = Path()
+
+        val first = track[0]
+
+        path.moveTo(first.x, first.y)
+
+        for (point in track) {
+
+            path.lineTo(point.x, point.y)
+        }
+
+        path.close()
+
+        // Track
+        paint.color = Color.DKGRAY
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 420f
+
+        canvas.drawPath(path, paint)
+
+        // Track center
+        paint.color = Color.LTGRAY
+        paint.strokeWidth = 10f
+
+        canvas.drawPath(path, paint)
+
+        // Outer edge
+        paint.color = Color.WHITE
+        paint.strokeWidth = 16f
+
+        canvas.drawPath(path, paint)
+
+        paint.style = Paint.Style.FILL
+    }
+
+    private fun drawPlayer(canvas: Canvas) {
+
+        canvas.save()
+
+        canvas.translate(playerX, playerY)
+
+        canvas.rotate(
+            Math.toDegrees(playerAngle.toDouble()).toFloat()
+        )
+
+        paint.color = Color.RED
+
+        canvas.drawRoundRect(
+            -45f,
+            -25f,
+            45f,
+            25f,
+            12f,
+            12f,
+            paint
+        )
+
+        // Windshield
+        paint.color = Color.rgb(100, 190, 230)
+
+        canvas.drawRect(
+            0f,
+            -19f,
+            28f,
+            19f,
+            paint
+        )
+
+        // Wheels
+        paint.color = Color.BLACK
+
+        canvas.drawRect(-30f, -29f, -5f, -20f, paint)
+        canvas.drawRect(-30f, 20f, -5f, 29f, paint)
+
+        canvas.drawRect(15f, -29f, 38f, -20f, paint)
+        canvas.drawRect(15f, 20f, 38f, 29f, paint)
+
+        canvas.restore()
+    }
+
+    private fun drawOpponents(canvas: Canvas) {
+
+        for ((index, car) in opponents.withIndex()) {
+
+            val p = getTrackPosition(car.progress)
+
+            canvas.save()
+
+            canvas.translate(
+                p.x + car.offset,
+                p.y
+            )
+
+            paint.color =
+                when (index) {
+                    0 -> Color.BLUE
+                    1 -> Color.YELLOW
+                    2 -> Color.WHITE
+                    else -> Color.MAGENTA
+                }
+
+            canvas.drawRoundRect(
+                -40f,
+                -22f,
+                40f,
+                22f,
+                10f,
+                10f,
+                paint
+            )
+
+            canvas.restore()
+        }
+    }
+
+    // -------------------------
+    // HUD
+    // -------------------------
+
+    private fun drawHUD(canvas: Canvas) {
+
+        paint.color = Color.WHITE
+        paint.textSize = 42f
+        paint.typeface = Typeface.DEFAULT_BOLD
+
+        canvas.drawText(
+            "LAP $lap / $totalLaps",
+            35f,
+            55f,
+            paint
+        )
+
+        canvas.drawText(
+            "SPEED ${playerSpeed.toInt()}",
+            35f,
+            105f,
+            paint
+        )
+
+        val position = calculatePosition()
+
+        canvas.drawText(
+            "POSITION $position / ${opponents.size + 1}",
+            35f,
+            155f,
+            paint
+        )
+
+        canvas.drawText(
+            "TIME %.1f".format(elapsedTime),
+            width - 240f,
+            55f,
+            paint
+        )
+    }
+
+    private fun drawControls(canvas: Canvas) {
+
+        val w = width.toFloat()
+        val h = height.toFloat()
+
+        paint.alpha = 130
+
+        // Left
+        paint.color = Color.WHITE
+
+        canvas.drawCircle(
+            100f,
+            h - 110f,
+            65f,
+            paint
+        )
+
+        // Right
+        canvas.drawCircle(
+            270f,
+            h - 110f,
+            65f,
+            paint
+        )
+
+        // Accelerate
+        canvas.drawCircle(
+            w - 110f,
+            h - 150f,
+            70f,
+            paint
+        )
+
+        // Brake
+        canvas.drawCircle(
+            w - 110f,
+            h - 50f,
+            45f,
+            paint
+        )
+
+        paint.alpha = 255
+
+        paint.color = Color.BLACK
+        paint.textSize = 38f
+
+        canvas.drawText(
+            "←",
+            82f,
+            h - 97f,
+            paint
+        )
+
+        canvas.drawText(
+            "→",
+            252f,
+            h - 97f,
+            paint
+        )
+
+        canvas.drawText(
+            "GO",
+            w - 132f,
+            h - 138f,
+            paint
+        )
+
+        canvas.drawText(
+            "B",
+            w - 123f,
+            h - 38f,
+            paint
+        )
+    }
+
+    private fun drawFinishScreen(canvas: Canvas) {
+
+        paint.color = Color.argb(220, 0, 0, 0)
+
+        canvas.drawRect(
+            0f,
+            0f,
+            width.toFloat(),
+            height.toFloat(),
+            paint
+        )
+
+        paint.color = Color.WHITE
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = Typeface.DEFAULT_BOLD
+
+        paint.textSize = 70f
+
+        canvas.drawText(
+            "FINISH!",
+            width / 2f,
+            height / 2f - 60f,
+            paint
+        )
+
+        paint.textSize = 40f
+
+        canvas.drawText(
+            "TIME %.2f".format(elapsedTime),
+            width / 2f,
+            height / 2f + 10f,
+            paint
+        )
+
+        canvas.drawText(
+            "TAP TO RESTART",
+            width / 2f,
+            height / 2f + 80f,
+            paint
+        )
+
+        paint.textAlign = Paint.Align.LEFT
+    }
+
+    // -------------------------
+    // Touch controls
+    // -------------------------
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+
+        val x = event.x
+        val y = event.y
+
+        val h = height.toFloat()
+
+        if (raceFinished) {
+
+            if (event.action == MotionEvent.ACTION_DOWN) {
+
+                restart()
+            }
+
+            return true
+        }
+
+        when (event.action) {
+
+            MotionEvent.ACTION_DOWN,
+            MotionEvent.ACTION_MOVE -> {
+
+                steering = 0f
+
+                if (x < 180f && y > h - 220f) {
+                    steering = -1f
+                }
+
+                if (x in 180f..350f && y > h - 220f) {
+                    steering = 1f
+                }
+
+                acceleratePressed =
+                    x > width - 220f &&
+                    y > h - 240f
+
+                brakePressed =
+                    x > width - 200f &&
+                    y > h - 100f
+            }
+
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+
+                steering = 0f
+                acceleratePressed = false
+                brakePressed = false
+            }
+        }
+
+        return true
+    }
+
+    // -------------------------
+    // Helpers
+    // -------------------------
+
+    private fun getTrackPosition(progress: Float): PointF {
+
+        var p = progress % 1f
+
+        if (p < 0)
+            p += 1f
+
+        val index =
+            (p * track.size).toInt() % track.size
+
+        return track[index]
+    }
+
+    private fun nearestTrackPoint(
+        x: Float,
+        y: Float
+    ): PointF {
+
+        var nearest = track[0]
+        var best = Float.MAX_VALUE
+
+        for (point in track) {
+
+            val d =
+                distance(x, y, point.x, point.y)
+
+            if (d < best) {
+
+                best = d
+                nearest = point
+            }
+        }
+
+        return nearest
+    }
+
+    private fun distance(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float
+    ): Float {
+
+        return sqrt(
+            (x2 - x1).pow(2) +
+            (y2 - y1).pow(2)
+        )
+    }
+
+    private fun calculatePosition(): Int {
+
+        var position = 1
+
+        for (car in opponents) {
+
+            if (car.progress > playerProgress)
+                position++
+        }
+
+        return position
+    }
+
+    private fun restart() {
+
+        lap = 1
+        playerProgress = 0f
+        playerSpeed = 0f
+        elapsedTime = 0f
+
+        playerX = track[0].x
+        playerY = track[0].y
+
+        playerAngle = 0f
+
+        createOpponents()
+
+        raceFinished = false
+        gameRunning = true
+    }
+
+    data class Opponent(
+        var progress: Float,
+        val speed: Float,
+        val offset: Float
+    )
+}
+```
